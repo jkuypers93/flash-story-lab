@@ -180,10 +180,12 @@ export const CreateVideoModal = ({ open, onOpenChange }: CreateVideoModalProps) 
   const handleCreate = async () => {
     if (!imageFile || !audioBlob) return;
 
+    console.log("🚀 Starting video creation workflow...");
     setIsCreating(true);
 
     try {
       // 1. Upload image to storage
+      console.log("📸 Step 1: Uploading image...");
       const imageFileName = `image-${Date.now()}-${imageFile.name}`;
       const { data: imageData, error: imageError } = await supabase.storage
         .from("images")
@@ -196,8 +198,10 @@ export const CreateVideoModal = ({ open, onOpenChange }: CreateVideoModalProps) 
         .getPublicUrl(imageFileName);
 
       const imageUrl = imageUrlData.publicUrl;
+      console.log("✅ Image uploaded:", imageUrl);
 
       // 2. Upload audio to storage
+      console.log("🎤 Step 2: Uploading audio...");
       const audioFileName = `audio-${Date.now()}.webm`;
       const { data: audioData, error: audioError } = await supabase.storage
         .from("audio")
@@ -210,8 +214,10 @@ export const CreateVideoModal = ({ open, onOpenChange }: CreateVideoModalProps) 
         .getPublicUrl(audioFileName);
 
       const audioUrl = audioUrlData.publicUrl;
+      console.log("✅ Audio uploaded:", audioUrl);
 
       // 3. Create project record
+      console.log("📝 Step 3: Creating project record...");
       const { data: project, error: projectError } = await supabase
         .from("projects")
         .insert({
@@ -231,12 +237,15 @@ export const CreateVideoModal = ({ open, onOpenChange }: CreateVideoModalProps) 
         throw new Error(`Failed to create project: ${projectError?.message}`);
       }
 
+      console.log("✅ Project created:", project.id);
+
       toast({
         title: "Processing",
         description: "Transcribing audio...",
       });
 
       // 4. Call the transcribe-audio edge function
+      console.log("🎙️ Step 4: Transcribing audio...");
       const { data: transcriptionData, error: transcriptionError } = await supabase.functions.invoke(
         "transcribe-audio",
         {
@@ -251,7 +260,7 @@ export const CreateVideoModal = ({ open, onOpenChange }: CreateVideoModalProps) 
         throw new Error(`Transcription failed: ${transcriptionError.message}`);
       }
 
-      console.log("Transcription result:", transcriptionData);
+      console.log("✅ Transcription completed:", transcriptionData);
 
       toast({
         title: "Processing",
@@ -259,6 +268,7 @@ export const CreateVideoModal = ({ open, onOpenChange }: CreateVideoModalProps) 
       });
 
       // 5. Call the transcript-to-scenes edge function
+      console.log("🎬 Step 5: Generating scenes...");
       const { data: scenesData, error: scenesError } = await supabase.functions.invoke(
         "transcript-to-scenes",
         {
@@ -272,7 +282,7 @@ export const CreateVideoModal = ({ open, onOpenChange }: CreateVideoModalProps) 
         throw new Error(`Scene generation failed: ${scenesError.message}`);
       }
 
-      console.log("Scenes generated:", scenesData);
+      console.log("✅ Scenes generated:", scenesData);
 
       toast({
         title: "Processing",
@@ -280,6 +290,7 @@ export const CreateVideoModal = ({ open, onOpenChange }: CreateVideoModalProps) 
       });
 
       // 6. Call the generate-frames edge function
+      console.log("🖼️ Step 6: Generating frames...");
       const { data: framesData, error: framesError } = await supabase.functions.invoke(
         "generate-frames",
         {
@@ -290,15 +301,20 @@ export const CreateVideoModal = ({ open, onOpenChange }: CreateVideoModalProps) 
       );
 
       if (framesError) {
+        console.error("❌ Frame generation network error:", framesError);
         throw new Error(`Frame generation failed: ${framesError.message}`);
       }
+
+      console.log("📦 Frames response received:", framesData);
+      console.log("  - Success field:", framesData?.success);
+      console.log("  - Has frames:", !!framesData?.frames);
 
       // Check response body for success field
       if (!framesData || framesData.success === false) {
         const errorMsg = framesData?.error || "Unknown error during frame generation";
         const failedJobs = framesData?.failed_jobs || [];
 
-        console.error("Frame generation failed:", errorMsg);
+        console.error("❌ Frame generation failed:", errorMsg);
         if (failedJobs.length > 0) {
           console.error("Failed jobs:", failedJobs);
         }
@@ -306,7 +322,7 @@ export const CreateVideoModal = ({ open, onOpenChange }: CreateVideoModalProps) 
         throw new Error(`Frame generation failed: ${errorMsg}`);
       }
 
-      console.log("Frames generated:", framesData);
+      console.log("✅ Frames generated successfully:", framesData);
 
       // 6.5. Wait for frames to be stored in database
       toast({
@@ -314,10 +330,13 @@ export const CreateVideoModal = ({ open, onOpenChange }: CreateVideoModalProps) 
         description: "Verifying frames are ready...",
       });
 
+      console.log("⏳ Starting to poll for frames in database...");
+
       // Poll the database to ensure frames are fully stored
       const framesReady = await waitForFrames(project.id);
 
       if (!framesReady) {
+        console.error("❌ Frames not ready after polling timeout");
         throw new Error(
           "Timeout waiting for frames to be stored in database. " +
           "This may indicate that some frame generation jobs failed or are taking too long. " +
@@ -325,12 +344,15 @@ export const CreateVideoModal = ({ open, onOpenChange }: CreateVideoModalProps) 
         );
       }
 
-      console.log("✓ All frames confirmed in database");
+      console.log("✅ All frames confirmed in database");
 
       toast({
         title: "Processing",
         description: "Generating video clips from frames...",
       });
+
+      console.log("🎬 About to call generate-clips edge function...");
+      console.log("  - Project ID:", project.id);
 
       // 7. Call the generate-clips edge function
       const { data: clipsData, error: clipsError } = await supabase.functions.invoke(
@@ -342,12 +364,17 @@ export const CreateVideoModal = ({ open, onOpenChange }: CreateVideoModalProps) 
         }
       );
 
+      console.log("🎬 Generate-clips response received");
+      console.log("  - Error:", clipsError);
+      console.log("  - Data:", clipsData);
+
       if (clipsError) {
+        console.error("❌ Clip generation network error:", clipsError);
         throw new Error(`Clip generation failed: ${clipsError.message}`);
       }
 
-      console.log("Project created:", project);
-      console.log("Clips initiated:", clipsData);
+      console.log("✅ Project created:", project);
+      console.log("✅ Clips initiated:", clipsData);
 
       const totalClips = clipsData?.total_clips || 0;
       const completedImmediately = clipsData?.completed || 0;
@@ -403,13 +430,19 @@ export const CreateVideoModal = ({ open, onOpenChange }: CreateVideoModalProps) 
       setStyle("Silly");
       onOpenChange(false);
     } catch (error) {
-      console.error("Error creating video:", error);
+      console.error("❌ ERROR in video creation workflow:");
+      console.error("  - Error type:", error?.constructor?.name);
+      console.error("  - Error message:", error instanceof Error ? error.message : String(error));
+      console.error("  - Full error object:", error);
+      console.error("  - Stack trace:", error instanceof Error ? error.stack : "N/A");
+
       toast({
         title: "Error",
         description: error instanceof Error ? error.message : "Failed to create video project",
         variant: "destructive",
       });
     } finally {
+      console.log("🏁 Video creation workflow ended (isCreating set to false)");
       setIsCreating(false);
     }
   };

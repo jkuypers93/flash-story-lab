@@ -194,12 +194,12 @@ async function initiateVideoGeneration(
 
     const payload = {
         taskType: "videoInference" as const,
-        model: "bytedance:2@1", // Google Veo 2.1 model
+        model: "google:3@3", // Google Veo 2.1 model
         duration: 4, //parseInt(sceneInfo?.duration) || 3, // duration in seconds
         fps: 24,
         outputFormat: "mp4" as const,
-        height: 480,
-        width: 864,
+        height: 720,
+        width: 1280,
         numberResults: 1,
         includeCost: true,
         outputQuality: 85,
