@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { ImageUpload } from "./ImageUpload";
 import { AudioRecorder } from "./AudioRecorder";
 import { StyleSelector } from "./StyleSelector";
+import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/hooks/use-toast";
 
 interface CreateVideoModalProps {
   open: boolean;
@@ -13,12 +15,102 @@ interface CreateVideoModalProps {
 export const CreateVideoModal = ({ open, onOpenChange }: CreateVideoModalProps) => {
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
-  const [style, setStyle] = useState<string>("normal");
+  const [style, setStyle] = useState<string>("Silly");
+  const [isCreating, setIsCreating] = useState(false);
+  const { toast } = useToast();
 
-  const handleCreate = () => {
-    console.log("Creating video with:", { imageFile, audioBlob, style });
-    // Handle video creation logic here
-    onOpenChange(false);
+  const handleCreate = async () => {
+    if (!imageFile || !audioBlob) return;
+
+    setIsCreating(true);
+
+    try {
+      // 1. Upload image to storage
+      const imageFileName = `image-${Date.now()}-${imageFile.name}`;
+      const { data: imageData, error: imageError } = await supabase.storage
+        .from("images")
+        .upload(imageFileName, imageFile);
+
+      if (imageError) throw new Error(`Image upload failed: ${imageError.message}`);
+
+      const { data: imageUrlData } = supabase.storage
+        .from("images")
+        .getPublicUrl(imageFileName);
+
+      const imageUrl = imageUrlData.publicUrl;
+
+      // 2. Upload audio to storage
+      const audioFileName = `audio-${Date.now()}.webm`;
+      const { data: audioData, error: audioError } = await supabase.storage
+        .from("audio")
+        .upload(audioFileName, audioBlob);
+
+      if (audioError) throw new Error(`Audio upload failed: ${audioError.message}`);
+
+      const { data: audioUrlData } = supabase.storage
+        .from("audio")
+        .getPublicUrl(audioFileName);
+
+      const audioUrl = audioUrlData.publicUrl;
+
+      // 3. Create project record
+      const { data: project, error: projectError } = await supabase
+        .from("projects")
+        .insert({
+          input_image_url: imageUrl,
+          audio_recording_url: audioUrl,
+          models_used: { style },
+        })
+        .select()
+        .single();
+
+      if (projectError || !project) {
+        throw new Error(`Failed to create project: ${projectError?.message}`);
+      }
+
+      toast({
+        title: "Processing",
+        description: "Transcribing audio...",
+      });
+
+      // 4. Call the transcribe-audio edge function
+      const { data: transcriptionData, error: transcriptionError } = await supabase.functions.invoke(
+        "transcribe-audio",
+        {
+          body: {
+            audioUrl,
+            projectId: project.id,
+          },
+        }
+      );
+
+      if (transcriptionError) {
+        throw new Error(`Transcription failed: ${transcriptionError.message}`);
+      }
+
+      toast({
+        title: "Success!",
+        description: "Video project created and audio transcribed successfully.",
+      });
+
+      console.log("Project created:", project);
+      console.log("Transcription result:", transcriptionData);
+
+      // Reset form and close modal
+      setImageFile(null);
+      setAudioBlob(null);
+      setStyle("Silly");
+      onOpenChange(false);
+    } catch (error) {
+      console.error("Error creating video:", error);
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to create video project",
+        variant: "destructive",
+      });
+    } finally {
+      setIsCreating(false);
+    }
   };
 
   return (
@@ -27,7 +119,7 @@ export const CreateVideoModal = ({ open, onOpenChange }: CreateVideoModalProps) 
         <DialogHeader>
           <DialogTitle className="text-2xl font-semibold">Create Video</DialogTitle>
         </DialogHeader>
-        
+
         <div className="space-y-6 py-4">
           <div className="space-y-2">
             <label className="text-sm font-medium text-foreground">Upload Image</label>
@@ -45,15 +137,19 @@ export const CreateVideoModal = ({ open, onOpenChange }: CreateVideoModalProps) 
           </div>
 
           <div className="flex justify-end gap-3 pt-4">
-            <Button variant="outline" onClick={() => onOpenChange(false)}>
+            <Button
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              disabled={isCreating}
+            >
               Cancel
             </Button>
-            <Button 
+            <Button
               onClick={handleCreate}
-              disabled={!imageFile || !audioBlob}
+              disabled={!imageFile || !audioBlob || isCreating}
               className="bg-primary hover:bg-primary/90"
             >
-              Create Video
+              {isCreating ? "Processing..." : "Create Video"}
             </Button>
           </div>
         </div>
