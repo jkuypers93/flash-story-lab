@@ -50,35 +50,6 @@ const Index = () => {
           </Button>
         </div>
 
-        <div className="mt-20 grid grid-cols-1 md:grid-cols-3 gap-8 max-w-4xl mx-auto">
-          <div className="text-center space-y-3">
-            <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mx-auto">
-              <span className="text-2xl">📸</span>
-            </div>
-            <h3 className="font-semibold text-foreground">Upload Image</h3>
-            <p className="text-sm text-muted-foreground">
-              Start with your favorite image in JPG or PNG format
-            </p>
-          </div>
-          <div className="text-center space-y-3">
-            <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mx-auto">
-              <span className="text-2xl">🎤</span>
-            </div>
-            <h3 className="font-semibold text-foreground">Record Audio</h3>
-            <p className="text-sm text-muted-foreground">
-              Add your voice or narration up to 40 seconds
-            </p>
-          </div>
-          <div className="text-center space-y-3">
-            <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mx-auto">
-              <span className="text-2xl">🎬</span>
-            </div>
-            <h3 className="font-semibold text-foreground">Choose Style</h3>
-            <p className="text-sm text-muted-foreground">
-              Select from various styles to match your vision
-            </p>
-          </div>
-        </div>
       </main>
 
       <CreateVideoModal open={modalOpen} onOpenChange={setModalOpen} />
