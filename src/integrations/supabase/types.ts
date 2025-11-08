@@ -14,7 +14,45 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      projects: {
+        Row: {
+          audio_recording_url: string | null
+          created_at: string | null
+          frames: Json | null
+          id: string
+          input_image_url: string | null
+          models_used: Json | null
+          scenes: Json | null
+          script: string | null
+          updated_at: string | null
+          video_url: string | null
+        }
+        Insert: {
+          audio_recording_url?: string | null
+          created_at?: string | null
+          frames?: Json | null
+          id?: string
+          input_image_url?: string | null
+          models_used?: Json | null
+          scenes?: Json | null
+          script?: string | null
+          updated_at?: string | null
+          video_url?: string | null
+        }
+        Update: {
+          audio_recording_url?: string | null
+          created_at?: string | null
+          frames?: Json | null
+          id?: string
+          input_image_url?: string | null
+          models_used?: Json | null
+          scenes?: Json | null
+          script?: string | null
+          updated_at?: string | null
+          video_url?: string | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
