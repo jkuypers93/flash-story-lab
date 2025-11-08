@@ -232,7 +232,9 @@ Rules:
     }
 
     const breakdownResult = await breakdownResponse.json();
+    console.log("Breakdown result:", breakdownResult);
     const sceneBreakdowns: SceneBreakdown[] = JSON.parse(breakdownResult.choices[0].message.content);
+    console.log("Scene breakdowns:", sceneBreakdowns);
 
     console.log("Step 3: Updating database with script and scenes...");
 
