@@ -73,10 +73,6 @@ export const ProjectsList = () => {
     }
   };
 
-  const getStorageUrl = (bucket: string, path: string | null) => {
-    if (!path) return null;
-    return supabase.storage.from(bucket).getPublicUrl(path).data.publicUrl;
-  };
 
   if (loading) {
     return (
@@ -152,7 +148,7 @@ export const ProjectsList = () => {
                         <div>
                           <h4 className="font-medium mb-2">Input Image</h4>
                           <img
-                            src={getStorageUrl("images", project.input_image_url) || ""}
+                            src={project.input_image_url}
                             alt="Input"
                             className="max-w-sm rounded-lg border"
                           />
@@ -164,7 +160,7 @@ export const ProjectsList = () => {
                           <h4 className="font-medium mb-2">Audio Recording</h4>
                           <audio
                             controls
-                            src={getStorageUrl("audio", project.audio_recording_url) || ""}
+                            src={project.audio_recording_url}
                             className="w-full max-w-sm"
                           />
                         </div>
@@ -184,7 +180,7 @@ export const ProjectsList = () => {
                           <h4 className="font-medium mb-2">Generated Video</h4>
                           <video
                             controls
-                            src={getStorageUrl("video", project.video_url) || ""}
+                            src={project.video_url}
                             className="max-w-2xl rounded-lg border"
                           />
                         </div>
