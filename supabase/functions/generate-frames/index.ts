@@ -9,16 +9,24 @@ const corsHeaders = {
 
 interface Scene {
     scene_id: number;
-    first_frame: string;
-    last_frame: string;
     setting: string;
     visual_action: string;
     dialogue: string;
     emotion: string;
-    duration: string;
-    camera_motion: string;
+    duration_sec: number;
+    camera_motion: {
+        type: string;
+        speed: string;
+        start_frame: string;
+        end_frame: string;
+        lens_mm: number;
+        camera_height_m: number;
+        camera_heading: string;
+        lighting: string;
+    };
     continuity: {
         reuse_last_frame_from_previous: boolean;
+        world_rules: string;
     };
 }
 
@@ -115,22 +123,31 @@ serve(async (req) => {
         }
 
         try {
-            // Create all frame jobs
+            // Create all frame jobs (PROMPT 3 — Gemini Flash Image 2.5)
             const jobs: FrameJob[] = [];
             for (const [sceneKey, scene] of Object.entries(scenes)) {
                 const sceneData = scene as Scene;
 
+                // Extract palette from style_parameters
+                const palette_pack = style_parameters?.palette_pack || { primary: "natural", secondary: "balanced", contrast: "medium" };
+
+                // Build first_frame_prompt
+                const firstFramePrompt = `Vertical 9:16 realistic photo. ${sceneData.setting}. Camera for ${sceneData.camera_motion.type} at ${sceneData.camera_motion.camera_height_m} m, ${sceneData.camera_motion.lens_mm} mm eq, heading ${sceneData.camera_motion.camera_heading}. Capture a single exposure at START of motion. Lighting: ${sceneData.camera_motion.lighting}. Palette: ${palette_pack.primary} / ${palette_pack.secondary} (${palette_pack.contrast} contrast). Natural surfaces; photojournalistic realism; single exposure. Show one continuous moment only. ${sceneData.camera_motion.start_frame}`;
+
+                // Build last_frame_prompt
+                const lastFramePrompt = `Vertical 9:16 realistic photo. Same setting and orientation. Camera near END of ${sceneData.camera_motion.type}; preserve side placement of subjects (if any). Subtle change in pose, light, or expression — no freeze. Consistent lighting/palette. Photojournalistic realism; single exposure. Show one continuous moment only. ${sceneData.camera_motion.end_frame}`;
+
                 jobs.push({
                     sceneKey,
                     frameType: "first",
-                    prompt: sceneData.first_frame,
+                    prompt: firstFramePrompt,
                     status: "pending",
                 });
 
                 jobs.push({
                     sceneKey,
                     frameType: "last",
-                    prompt: sceneData.last_frame,
+                    prompt: lastFramePrompt,
                     status: "pending",
                 });
             }
@@ -143,16 +160,21 @@ serve(async (req) => {
                 console.log(`      Prompt preview: ${job.prompt.substring(0, 100)}...`);
 
                 try {
+                    // PROMPT 3 settings: Gemini Flash Image 2.5 (Nano Banana)
+                    // Aspect ratio: 9:16 (≈ 1024×1820)
+                    // Steps: 30 Guidance: 7.5
                     const requestParams = {
                         taskType: "imageInference" as const,
                         positivePrompt: job.prompt,
-                        model: "google:4@1", // Using Runware's default model
+                        model: "google:4@1", // Gemini Flash Image 2.5 via Runware
                         width: 1024,
-                        height: 1024,
+                        height: 1820, // 9:16 aspect ratio
                         numberResults: 1,
                         outputType: ["URL"] as const,
-                        outputFormat: "JPEG" as const,
+                        outputFormat: "PNG" as const,
                         includeCost: true,
+                        steps: 30,
+                        CFGScale: 7.5,
                     };
 
                     console.log(`      Request params:`, JSON.stringify(requestParams, null, 2));

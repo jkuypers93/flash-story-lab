@@ -80,23 +80,71 @@ interface ScriptOutput {
 
 interface SceneBreakdown {
   scene_id: number;
-  duration: string;
+  duration_sec: number;
   setting: string;
   visual_action: string;
   first_frame?: string;
   last_frame?: string;
   dialogue: string;
   emotion: string;
-  camera_motion: string;
+  camera_motion: {
+    type: string;
+    speed: string;
+    start_frame: string;
+    end_frame: string;
+    lens_mm: number;
+    camera_height_m: number;
+    camera_heading: string;
+    lighting: string;
+  };
   continuity: {
     reuse_last_frame_from_previous: boolean;
+    world_rules: string;
   };
 }
 
-const CAMERA_MOTIONS = {
-  silly: ["whip_pan", "dutch_angle_zoom", "chaotic_handheld", "snap_zoom", "spinning_dolly"],
-  commercial: ["smooth_dolly", "crane_up", "steadicam_glide", "slow_zoom", "arc_shot"],
-  dramatic: ["slow_push_in", "tracking_shot", "pull_back_reveal", "static_close_up", "low_angle_tilt"],
+const STYLE_DEFINITIONS = {
+  cinematic: {
+    description: "High-realism storytelling with emotional depth, soft contrast, shallow DOF, fluid motion.",
+    camera_paths: [
+      { type: "dolly-in", speed: "slow" },
+      { type: "slider L→R", speed: "medium" },
+      { type: "handheld drift", speed: "subtle" },
+      { type: "crane rise", speed: "slow" }
+    ],
+    lighting_hint: "directional key with soft diffusion; cinematic falloff",
+    palette_hint: "filmic contrast, mild teal-orange separation"
+  },
+  commercial: {
+    description: "Glossy, high-clarity, product-focused imagery with crisp transitions.",
+    camera_paths: [
+      { type: "slider R→L", speed: "medium" },
+      { type: "static macro", speed: "none" },
+      { type: "crane drop", speed: "slow" }
+    ],
+    lighting_hint: "high-key reflective lighting, minimal shadows",
+    palette_hint: "neutral white balance, vivid saturation"
+  },
+  comedy: {
+    description: "Bright, timing-driven framing; clear spatial cues; reaction emphasis.",
+    camera_paths: [
+      { type: "zoom-in", speed: "fast" },
+      { type: "handheld micro-pan", speed: "medium" },
+      { type: "static wide", speed: "none" }
+    ],
+    lighting_hint: "warm daylight interiors, expressive contrast",
+    palette_hint: "vibrant but realistic colors"
+  },
+  normal: {
+    description: "Neutral documentary realism; unobtrusive, steady observation.",
+    camera_paths: [
+      { type: "tripod static", speed: "none" },
+      { type: "slow pan", speed: "slow" },
+      { type: "handheld steady", speed: "medium" }
+    ],
+    lighting_hint: "ambient environmental light",
+    palette_hint: "balanced natural color"
+  }
 };
 
 serve(async (req) => {
@@ -177,37 +225,44 @@ serve(async (req) => {
 
     console.log("Step 1: Generating cinematic script from transcript...");
 
-    // Step 1: Generate cinematic script
-    const scriptPrompt = `Role: Film scriptwriter
-Task: Turn the transcript into a 15-20s cinematic script with explicit dialogue and stage directions. Keep realism; no humor unless present in the story. Output up to 3 scenes, up to 4s each, 9:16 framing.
+    // Step 1: Generate cinematic script (PROMPT 1 — Story Bible / Script Generator)
+    const scriptPrompt = `SYSTEM / POLICY
+- Non-interactive; do NOT ask questions.
+- Exactly five scenes × 5 seconds = 25 s total.
+- Output = JSON only.
 
-Inputs:
+INPUTS
+- Transcript or source text: ${transcript_text}
 - Style: ${style}
-- Transcript: ${transcript_text}
 - Identity pack: ${JSON.stringify(identity_pack)}
 - Environment pack: ${JSON.stringify(environment_pack)}
 - Palette pack: ${JSON.stringify(palette_pack)}
 
-Output JSON (respond with ONLY valid JSON, no markdown or explanations):
+TASK
+Convert text into a concise five-scene script.
+
+OUTPUT SCHEMA
 {
   "title": "...",
   "logline": "...",
   "scenes": [
     {
       "index": 1,
-      "setting": "location/time/mood",
-      "visual_action": "what we see",
-      "dialogue": "spoken line(s)",
+      "duration_sec": 5,
+      "setting": "location / time / mood",
+      "visual_action": "visible event",
+      "dialogue": "short line or empty",
       "emotion": "dominant feeling",
       "beats": ["beat-1","beat-2"]
     }
   ]
 }
 
-Constraints:
-- Natural language, concrete nouns, film verbs.
-- Keep names, wardrobe, and lighting consistent with identity/environment packs.
-- Prepare for 24 fps, 5 s per scene.`;
+RULES
+- Show through action and dialogue only.
+- Maintain identities and environments from packs.
+- Define light direction, time of day, and ambience clearly.
+- Output exactly 5 scenes, each 5 seconds.`;
 
     const scriptResponse = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -241,46 +296,57 @@ Constraints:
 
     console.log("Step 2: Breaking down script into shot plans...");
 
-    // Step 2: Scene breakdown with camera paths
-    const cameraPaths = CAMERA_MOTIONS[style as keyof typeof CAMERA_MOTIONS] || CAMERA_MOTIONS.commercial;
+    // Step 2: Scene breakdown with camera paths (PROMPT 2 — Director & Camera Planner)
+    const styleDefinition = STYLE_DEFINITIONS[style as keyof typeof STYLE_DEFINITIONS] || STYLE_DEFINITIONS.commercial;
 
-    const sceneBreakdownPrompt = `Role: Director
-Task: Convert script scenes to shot plans with deterministic camera motion per style. For each scene, describe the first and last frames of the scene in great detail.
+    const sceneBreakdownPrompt = `SYSTEM / POLICY
+- Non-interactive; output one JSON array.
+- 5 scenes × 5 s = 25 s total.
+- Maintain spatial continuity across scenes.
+- Every second cut may reuse previous last frame.
 
-Inputs:
+INPUTS
 - Style: ${style}
-- Available Camera Paths: ${JSON.stringify(cameraPaths)}
-- Project seed: ${global_seed}
+- CameraPaths(style): ${JSON.stringify(styleDefinition.camera_paths)}
 - Identity pack: ${JSON.stringify(identity_pack)}
 - Environment pack: ${JSON.stringify(environment_pack)}
 - Palette pack: ${JSON.stringify(palette_pack)}
-- Base scenes: ${JSON.stringify(scriptOutput.scenes)}
+- Scenes: ${JSON.stringify(scriptOutput.scenes)}
+- Seed: ${global_seed}
 
-Output JSON (respond with ONLY valid JSON object, no markdown or explanations):
-{
-  "scenes": [
-    {
-      "scene_id": 1,
-      "duration": "5s",
-      "setting": "...",
-      "visual_action": "...",
-      "first_frame": "...",
-      "last_frame": "...",
-      "dialogue": "...",
-      "emotion": "...",
-      "camera_motion": "one of the available camera paths",
-      "continuity": {
-        "reuse_last_frame_from_previous": false
-      }
+TASK
+Turn each scene into a detailed camera plan.
+
+OUTPUT SCHEMA
+[
+  {
+    "scene_id": 1,
+    "duration_sec": 5,
+    "setting": "...",
+    "visual_action": "...",
+    "dialogue": "...",
+    "emotion": "...",
+    "camera_motion": {
+      "type": "<from style library>",
+      "speed": "<slow|medium|fast>",
+      "start_frame": "<composition start>",
+      "end_frame": "<composition end>",
+      "lens_mm": <int>,
+      "camera_height_m": <float>,
+      "camera_heading": "<N|NE|E|SE|S|SW|W|NW>",
+      "lighting": "${styleDefinition.lighting_hint}"
+    },
+    "continuity": {
+      "reuse_last_frame_from_previous": <true|false>,
+      "world_rules": "consistent actor/object side and orientation"
     }
-  ]
-}
+  }
+]
 
-Rules:
-- Every 2nd scene (scene_id 2, 3): set continuity.reuse_last_frame_from_previous = true
-- Maintain same actor and wardrobe throughout
-- Include vertical composition hints in visual_action
-- Use only camera motions from the available camera paths list
+RULES
+- Vary motion, lens, and height per scene for rhythm.
+- Keep lighting and palette stable unless a scene jump occurs.
+- No narration or model dialogue.
 - The response MUST be a valid JSON object with a "scenes" array property`;
 
     // Use retry logic for scene breakdown API call
