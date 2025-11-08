@@ -114,13 +114,34 @@ export const CreateVideoModal = ({ open, onOpenChange }: CreateVideoModalProps) 
         throw new Error(`Scene generation failed: ${scenesError.message}`);
       }
 
+      console.log("Scenes generated:", scenesData);
+
+      toast({
+        title: "Processing",
+        description: "Generating frames for each scene...",
+      });
+
+      // 6. Call the generate-frames edge function
+      const { data: framesData, error: framesError } = await supabase.functions.invoke(
+        "generate-frames",
+        {
+          body: {
+            project_id: project.id,
+          },
+        }
+      );
+
+      if (framesError) {
+        throw new Error(`Frame generation failed: ${framesError.message}`);
+      }
+
       toast({
         title: "Success!",
-        description: "Video project created with script and scenes successfully.",
+        description: "Video project created with script, scenes, and frames successfully.",
       });
 
       console.log("Project created:", project);
-      console.log("Scenes generated:", scenesData);
+      console.log("Frames generated:", framesData);
 
       // Reset form and close modal
       setImageFile(null);
