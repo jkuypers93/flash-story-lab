@@ -93,13 +93,34 @@ export const CreateVideoModal = ({ open, onOpenChange }: CreateVideoModalProps) 
         throw new Error(`Transcription failed: ${transcriptionError.message}`);
       }
 
+      console.log("Transcription result:", transcriptionData);
+
+      toast({
+        title: "Processing",
+        description: "Generating script and scenes...",
+      });
+
+      // 5. Call the transcript-to-scenes edge function
+      const { data: scenesData, error: scenesError } = await supabase.functions.invoke(
+        "transcript-to-scenes",
+        {
+          body: {
+            project_id: project.id,
+          },
+        }
+      );
+
+      if (scenesError) {
+        throw new Error(`Scene generation failed: ${scenesError.message}`);
+      }
+
       toast({
         title: "Success!",
-        description: "Video project created and audio transcribed successfully.",
+        description: "Video project created with script and scenes successfully.",
       });
 
       console.log("Project created:", project);
-      console.log("Transcription result:", transcriptionData);
+      console.log("Scenes generated:", scenesData);
 
       // Reset form and close modal
       setImageFile(null);

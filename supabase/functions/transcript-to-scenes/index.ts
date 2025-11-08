@@ -66,27 +66,46 @@ serve(async (req) => {
       .eq("id", project_id)
       .single();
 
+    console.log("Project data:", project);
+
     if (fetchError || !project) {
       throw new Error(`Failed to fetch project: ${fetchError?.message}`);
     }
 
     const { transcription_url, style_parameters } = project;
 
+    console.log("Style parameters:", style_parameters);
+    console.log("Transcription URL:", transcription_url);
+
     if (!transcription_url) {
       throw new Error("transcription_url is missing from project");
     }
 
+    // Extract bucket and file path from the full public URL
+    // URL format: https://{project}.supabase.co/storage/v1/object/public/{bucket}/{file_path}
+    const urlParts = transcription_url.split("/public/");
+    if (urlParts.length !== 2) {
+      throw new Error("Invalid transcription_url format");
+    }
+
+    const pathParts = urlParts[1].split("/");
+    const bucket = pathParts[0]; // e.g., "scripts"
+    const filePath = pathParts.slice(1).join("/"); // e.g., "transcription-xxx.txt"
+
     // Fetch transcription text from storage
     const { data: transcriptData, error: downloadError } = await supabaseClient
       .storage
-      .from("audio")
-      .download(transcription_url.replace("audio/", ""));
+      .from(bucket)
+      .download(filePath);
+
 
     if (downloadError) {
       throw new Error(`Failed to download transcription: ${downloadError.message}`);
     }
 
     const transcript_text = await transcriptData.text();
+
+    console.log("Transcript text:", transcript_text);
 
     // Extract style parameters
     const style = style_parameters?.style || "commercial";
@@ -101,7 +120,7 @@ serve(async (req) => {
 
     // Step 1: Generate cinematic script
     const scriptPrompt = `Role: Film scriptwriter
-Task: Turn the transcript into a 30–50s cinematic script with explicit dialogue and stage directions. Keep realism; no humor unless present in the story. Output 5 scenes, ~5s each, 9:16 framing.
+Task: Turn the transcript into a 30–50s cinematic script with explicit dialogue and stage directions. Keep realism; no humor unless present in the story. Output up to 5 scenes, up to 7s each, 9:16 framing.
 
 Inputs:
 - Style: ${style}
@@ -150,7 +169,6 @@ Constraints:
             content: scriptPrompt,
           },
         ],
-        temperature: 0.7,
         response_format: { type: "json_object" },
       }),
     });
@@ -169,7 +187,7 @@ Constraints:
     const cameraPaths = CAMERA_MOTIONS[style as keyof typeof CAMERA_MOTIONS] || CAMERA_MOTIONS.commercial;
 
     const sceneBreakdownPrompt = `Role: Director
-Task: Convert script scenes to shot plans with deterministic camera motion per style.
+Task: Convert script scenes to shot plans with deterministic camera motion per style. For each scene, describe the first and last frames of the scene in great detail.
 
 Inputs:
 - Style: ${style}
@@ -187,6 +205,8 @@ Output JSON (respond with ONLY valid JSON array, no markdown or explanations):
     "duration": "5s",
     "setting": "...",
     "visual_action": "...",
+    "first_frame": "...",
+    "last_frame": "...",
     "dialogue": "...",
     "emotion": "...",
     "camera_motion": "one of the available camera paths",
@@ -221,7 +241,6 @@ Rules:
             content: sceneBreakdownPrompt,
           },
         ],
-        temperature: 0.7,
         response_format: { type: "json_object" },
       }),
     });
@@ -233,7 +252,18 @@ Rules:
 
     const breakdownResult = await breakdownResponse.json();
     console.log("Breakdown result:", breakdownResult);
-    const sceneBreakdowns: SceneBreakdown[] = JSON.parse(breakdownResult.choices[0].message.content);
+    const parsedContent = JSON.parse(breakdownResult.choices[0].message.content);
+
+    // Handle both array format and object with shots property
+    let sceneBreakdowns: SceneBreakdown[];
+    if (Array.isArray(parsedContent)) {
+      sceneBreakdowns = parsedContent;
+    } else if (parsedContent.shots && Array.isArray(parsedContent.shots)) {
+      sceneBreakdowns = parsedContent.shots;
+    } else {
+      throw new Error(`Unexpected scene breakdown format: ${JSON.stringify(parsedContent)}`);
+    }
+
     console.log("Scene breakdowns:", sceneBreakdowns);
 
     console.log("Step 3: Updating database with script and scenes...");
