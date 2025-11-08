@@ -6,6 +6,63 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// Helper function to extract JSON from response text
+function extractJSON(text: string): any {
+  // Try direct parse first
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Try to extract from markdown code blocks
+    const codeBlockMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+    if (codeBlockMatch) {
+      try {
+        return JSON.parse(codeBlockMatch[1]);
+      } catch {
+        // Continue to next attempt
+      }
+    }
+
+    // Try to find JSON object or array in text
+    const jsonMatch = text.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
+    if (jsonMatch) {
+      try {
+        return JSON.parse(jsonMatch[1]);
+      } catch {
+        // Continue to next attempt
+      }
+    }
+
+    // If all else fails, throw original error
+    throw new Error(`Failed to parse JSON from text: ${text.substring(0, 200)}...`);
+  }
+}
+
+// Retry helper with exponential backoff
+async function retryWithBackoff<T>(
+  fn: () => Promise<T>,
+  maxRetries: number = 3,
+  baseDelayMs: number = 1000
+): Promise<T> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error as Error;
+      console.log(`Attempt ${attempt + 1} failed:`, error.message);
+
+      if (attempt < maxRetries - 1) {
+        const delayMs = baseDelayMs * Math.pow(2, attempt);
+        console.log(`Retrying in ${delayMs}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+
+  throw lastError;
+}
+
 interface ScriptScene {
   index: number;
   setting: string;
@@ -26,6 +83,8 @@ interface SceneBreakdown {
   duration: string;
   setting: string;
   visual_action: string;
+  first_frame?: string;
+  last_frame?: string;
   dialogue: string;
   emotion: string;
   camera_motion: string;
@@ -120,7 +179,7 @@ serve(async (req) => {
 
     // Step 1: Generate cinematic script
     const scriptPrompt = `Role: Film scriptwriter
-Task: Turn the transcript into a 30–50s cinematic script with explicit dialogue and stage directions. Keep realism; no humor unless present in the story. Output up to 5 scenes, up to 7s each, 9:16 framing.
+Task: Turn the transcript into a 15-20s cinematic script with explicit dialogue and stage directions. Keep realism; no humor unless present in the story. Output up to 3 scenes, up to 4s each, 9:16 framing.
 
 Inputs:
 - Style: ${style}
@@ -148,8 +207,7 @@ Output JSON (respond with ONLY valid JSON, no markdown or explanations):
 Constraints:
 - Natural language, concrete nouns, film verbs.
 - Keep names, wardrobe, and lighting consistent with identity/environment packs.
-- Prepare for 24 fps, 5 s per scene.
-- Output exactly 5 scenes.`;
+- Prepare for 24 fps, 5 s per scene.`;
 
     const scriptResponse = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -158,7 +216,7 @@ Constraints:
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "gpt-5",
+        model: "gpt-4o-mini",
         messages: [
           {
             role: "system",
@@ -198,71 +256,103 @@ Inputs:
 - Palette pack: ${JSON.stringify(palette_pack)}
 - Base scenes: ${JSON.stringify(scriptOutput.scenes)}
 
-Output JSON (respond with ONLY valid JSON array, no markdown or explanations):
-[
-  {
-    "scene_id": 1,
-    "duration": "5s",
-    "setting": "...",
-    "visual_action": "...",
-    "first_frame": "...",
-    "last_frame": "...",
-    "dialogue": "...",
-    "emotion": "...",
-    "camera_motion": "one of the available camera paths",
-    "continuity": {
-      "reuse_last_frame_from_previous": false
+Output JSON (respond with ONLY valid JSON object, no markdown or explanations):
+{
+  "scenes": [
+    {
+      "scene_id": 1,
+      "duration": "5s",
+      "setting": "...",
+      "visual_action": "...",
+      "first_frame": "...",
+      "last_frame": "...",
+      "dialogue": "...",
+      "emotion": "...",
+      "camera_motion": "one of the available camera paths",
+      "continuity": {
+        "reuse_last_frame_from_previous": false
+      }
     }
-  }
-]
+  ]
+}
 
 Rules:
-- Every 2nd scene (scene_id 2, 4): set continuity.reuse_last_frame_from_previous = true
+- Every 2nd scene (scene_id 2, 3): set continuity.reuse_last_frame_from_previous = true
 - Maintain same actor and wardrobe throughout
 - Include vertical composition hints in visual_action
 - Use only camera motions from the available camera paths list
-- Output exactly 5 scenes matching the input scenes`;
+- The response MUST be a valid JSON object with a "scenes" array property`;
 
-    const breakdownResponse = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${Deno.env.get("OPENAI_API_KEY")}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "gpt-5",
-        messages: [
-          {
-            role: "system",
-            content: "You are a professional film director. Respond only with valid JSON.",
-          },
-          {
-            role: "user",
-            content: sceneBreakdownPrompt,
-          },
-        ],
-        response_format: { type: "json_object" },
-      }),
-    });
+    // Use retry logic for scene breakdown API call
+    const sceneBreakdowns = await retryWithBackoff(async (): Promise<SceneBreakdown[]> => {
+      const breakdownResponse = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${Deno.env.get("OPENAI_API_KEY")}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages: [
+            {
+              role: "system",
+              content: "You are a professional film director. You must respond with valid JSON. The response must be a JSON object with a 'scenes' array property.",
+            },
+            {
+              role: "user",
+              content: sceneBreakdownPrompt,
+            },
+          ],
+          response_format: { type: "json_object" },
+          temperature: 0.7,
+        }),
+      });
 
-    if (!breakdownResponse.ok) {
-      const errorText = await breakdownResponse.text();
-      throw new Error(`OpenAI API error (scene breakdown): ${errorText}`);
-    }
+      if (!breakdownResponse.ok) {
+        const errorText = await breakdownResponse.text();
+        throw new Error(`OpenAI API error (scene breakdown): ${errorText}`);
+      }
 
-    const breakdownResult = await breakdownResponse.json();
-    console.log("Breakdown result:", breakdownResult);
-    const parsedContent = JSON.parse(breakdownResult.choices[0].message.content);
+      const breakdownResult = await breakdownResponse.json();
+      console.log("Breakdown result:", JSON.stringify(breakdownResult, null, 2));
 
-    // Handle both array format and object with shots property
-    let sceneBreakdowns: SceneBreakdown[];
-    if (Array.isArray(parsedContent)) {
-      sceneBreakdowns = parsedContent;
-    } else if (parsedContent.shots && Array.isArray(parsedContent.shots)) {
-      sceneBreakdowns = parsedContent.shots;
-    } else {
-      throw new Error(`Unexpected scene breakdown format: ${JSON.stringify(parsedContent)}`);
-    }
+      const contentText = breakdownResult.choices[0].message.content;
+      console.log("Raw content:", contentText);
+
+      // Use robust JSON extraction
+      const parsedContent = extractJSON(contentText);
+      console.log("Parsed content:", JSON.stringify(parsedContent, null, 2));
+
+      // Handle multiple possible formats with detailed logging
+      let extractedScenes: SceneBreakdown[];
+
+      if (Array.isArray(parsedContent)) {
+        console.log("Format: Direct array");
+        extractedScenes = parsedContent;
+      } else if (parsedContent.scenes && Array.isArray(parsedContent.scenes)) {
+        console.log("Format: Object with 'scenes' property");
+        extractedScenes = parsedContent.scenes;
+      } else if (parsedContent.shots && Array.isArray(parsedContent.shots)) {
+        console.log("Format: Object with 'shots' property");
+        extractedScenes = parsedContent.shots;
+      } else if (parsedContent.scene_breakdowns && Array.isArray(parsedContent.scene_breakdowns)) {
+        console.log("Format: Object with 'scene_breakdowns' property");
+        extractedScenes = parsedContent.scene_breakdowns;
+      } else {
+        // Log the structure to help debug
+        console.error("Unexpected format. Keys found:", Object.keys(parsedContent));
+        console.error("Content structure:", JSON.stringify(parsedContent, null, 2));
+        throw new Error(`Unexpected scene breakdown format. Expected object with 'scenes' array, got: ${JSON.stringify(parsedContent).substring(0, 300)}`);
+      }
+
+      // Validate we got scenes
+      if (!extractedScenes || extractedScenes.length === 0) {
+        throw new Error("No scenes found in the response");
+      }
+
+      console.log(`Successfully extracted ${extractedScenes.length} scenes`);
+      return extractedScenes;
+    }, 3, 1000);
 
     console.log("Scene breakdowns:", sceneBreakdowns);
 

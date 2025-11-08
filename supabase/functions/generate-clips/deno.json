@@ -1,0 +1,9 @@
+{
+    "tasks": {
+        "dev": "deno run --allow-net --allow-env --watch index.ts"
+    },
+    "imports": {
+        "supabase": "https://esm.sh/@supabase/supabase-js@2",
+        "@runware/sdk-js": "npm:@runware/sdk-js"
+    }
+}

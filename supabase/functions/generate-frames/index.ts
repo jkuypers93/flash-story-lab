@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { Runware } from "npm:@runware/sdk-js";
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -26,6 +27,16 @@ interface FrameUrls {
     last_frame: string;
 }
 
+interface FrameJob {
+    sceneKey: string;
+    frameType: "first" | "last";
+    prompt: string;
+    taskUUID?: string;
+    imageURL?: string;
+    status: "pending" | "processing" | "completed" | "failed";
+    error?: string;
+}
+
 serve(async (req) => {
     // Handle CORS preflight requests
     if (req.method === "OPTIONS") {
@@ -34,6 +45,7 @@ serve(async (req) => {
 
     try {
         const { project_id } = await req.json();
+        console.log("=== Starting frame generation for project:", project_id);
 
         if (!project_id) {
             throw new Error("project_id is required");
@@ -44,89 +56,292 @@ serve(async (req) => {
             Deno.env.get("SUPABASE_URL") ?? "",
             Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
         );
+        console.log("✓ Supabase client initialized");
 
         // Fetch project data
+        console.log("→ Fetching project data...");
         const { data: project, error: fetchError } = await supabaseClient
             .from("projects")
             .select("*")
             .eq("id", project_id)
             .single();
 
-        console.log("Project data:", project);
-
         if (fetchError || !project) {
+            console.error("✗ Failed to fetch project:", fetchError?.message);
             throw new Error(`Failed to fetch project: ${fetchError?.message}`);
         }
+
+        console.log("✓ Project fetched successfully");
+        console.log("  - Title:", project.title);
+        console.log("  - Created:", project.created_at);
 
         const { scenes, style_parameters } = project;
 
         if (!scenes) {
+            console.error("✗ No scenes found in project");
             throw new Error("scenes are missing from project");
         }
 
-        console.log("Scenes:", scenes);
+        const sceneCount = Object.keys(scenes).length;
+        console.log(`✓ Found ${sceneCount} scenes to process`);
+        console.log("  - Style parameters:", JSON.stringify(style_parameters, null, 2));
 
-        const frames: Record<string, FrameUrls> = {};
-
-        // Iterate through each scene
-        for (const [sceneKey, scene] of Object.entries(scenes)) {
-            const sceneData = scene as Scene;
-            console.log(`Processing scene ${sceneKey}...`);
-
-            const firstFrameUrl = await generateAndUploadFrame(
-                supabaseClient,
-                project_id,
-                sceneKey,
-                "first",
-                sceneData.first_frame,
-                style_parameters
-            );
-
-            const lastFrameUrl = await generateAndUploadFrame(
-                supabaseClient,
-                project_id,
-                sceneKey,
-                "last",
-                sceneData.last_frame,
-                style_parameters
-            );
-
-            frames[sceneKey] = {
-                first_frame: firstFrameUrl,
-                last_frame: lastFrameUrl,
-            };
-
-            console.log(`Scene ${sceneKey} frames generated:`, frames[sceneKey]);
+        // Initialize Runware SDK once
+        const runwareApiKey = Deno.env.get("RUNWARE_API_KEY");
+        if (!runwareApiKey) {
+            throw new Error("RUNWARE_API_KEY environment variable is not set");
         }
 
-        // Update project with frames
-        const { error: updateError } = await supabaseClient
-            .from("projects")
-            .update({
-                frames: frames,
-                updated_at: new Date().toISOString(),
-            })
-            .eq("id", project_id);
+        console.log("\n→ Initializing Runware SDK...");
+        console.log("  - API key present:", !!runwareApiKey);
+        console.log("  - API key length:", runwareApiKey.length);
+        console.log("  - Timeout: 60000ms");
 
-        if (updateError) {
-            throw new Error(`Failed to update project: ${updateError.message}`);
+        let runware;
+        try {
+            runware = await Runware.initialize({
+                apiKey: runwareApiKey,
+                timeoutDuration: 60000,
+            });
+            console.log("✓ Runware SDK initialized and connected");
+            console.log("  - SDK instance type:", typeof runware);
+            console.log("  - Has requestImages method:", typeof runware.requestImages === 'function');
+        } catch (initError) {
+            console.error("✗ Failed to initialize Runware SDK");
+            console.error("  - Error type:", initError?.constructor?.name);
+            console.error("  - Error message:", initError?.message || String(initError));
+            console.error("  - Full error:", initError);
+            throw initError;
         }
 
-        console.log("Successfully generated all frames");
+        try {
+            // Create all frame jobs
+            const jobs: FrameJob[] = [];
+            for (const [sceneKey, scene] of Object.entries(scenes)) {
+                const sceneData = scene as Scene;
 
-        return new Response(
-            JSON.stringify({
-                success: true,
-                project_id,
-                frames,
-            }),
-            {
-                headers: { ...corsHeaders, "Content-Type": "application/json" },
-                status: 200,
+                jobs.push({
+                    sceneKey,
+                    frameType: "first",
+                    prompt: sceneData.first_frame,
+                    status: "pending",
+                });
+
+                jobs.push({
+                    sceneKey,
+                    frameType: "last",
+                    prompt: sceneData.last_frame,
+                    status: "pending",
+                });
             }
-        );
+
+            console.log(`\n→ Submitting ${jobs.length} frame generation jobs...`);
+
+            // Submit all jobs at once
+            for (const job of jobs) {
+                console.log(`  → Submitting ${job.frameType} frame for scene ${job.sceneKey}...`);
+                console.log(`      Prompt preview: ${job.prompt.substring(0, 100)}...`);
+
+                try {
+                    const requestParams = {
+                        taskType: "imageInference" as const,
+                        positivePrompt: job.prompt,
+                        model: "google:4@1", // Using Runware's default model
+                        width: 1024,
+                        height: 1024,
+                        numberResults: 1,
+                        outputType: ["URL"] as const,
+                        outputFormat: "JPEG" as const,
+                        includeCost: true,
+                    };
+
+                    console.log(`      Request params:`, JSON.stringify(requestParams, null, 2));
+
+                    const images = await runware.requestImages(requestParams);
+
+                    console.log("      Raw response:", JSON.stringify(images, null, 2));
+
+                    console.log(`  → Received response for ${job.frameType} frame, scene ${job.sceneKey}`);
+                    console.log("      Response type:", typeof images);
+                    console.log("      Is array:", Array.isArray(images));
+                    console.log("      Length:", images?.length);
+
+                    if (images && images.length > 0) {
+                        const firstImage = images[0];
+                        console.log("      First image keys:", Object.keys(firstImage));
+                        console.log("      First image data:", JSON.stringify(firstImage, null, 2));
+
+                        // Try different possible field names
+                        const imageURL = firstImage.imageURL || firstImage.imageUrl || firstImage.url || firstImage.outputURL;
+
+                        if (imageURL) {
+                            job.imageURL = imageURL;
+                            job.status = "completed";
+                            console.log(`  ✓ Job completed for ${job.frameType} frame, scene ${job.sceneKey}`);
+                            console.log(`      Image URL: ${job.imageURL}`);
+                        } else {
+                            job.status = "failed";
+                            job.error = "No image URL field found in response";
+                            console.error(`  ✗ Job failed for ${job.frameType} frame, scene ${job.sceneKey}`);
+                            console.error(`      Reason: Response has no imageURL, imageUrl, url, or outputURL field`);
+                            console.error(`      Available fields:`, Object.keys(firstImage));
+                        }
+                    } else {
+                        job.status = "failed";
+                        job.error = "Empty or invalid response from Runware SDK";
+                        console.error(`  ✗ Job failed for ${job.frameType} frame, scene ${job.sceneKey}`);
+                        console.error(`      Reason: Response is empty or not an array`);
+                        console.error(`      Response data:`, JSON.stringify(images));
+                    }
+                } catch (error) {
+                    job.status = "failed";
+
+                    // Better error handling
+                    const errorMessage = error?.message || error?.toString() || String(error);
+                    job.error = errorMessage;
+
+                    console.error(`  ✗ Job failed for ${job.frameType} frame, scene ${job.sceneKey}`);
+                    console.error(`      Error type: ${error?.constructor?.name || typeof error}`);
+                    console.error(`      Error message: ${errorMessage}`);
+                    console.error(`      Full error:`, error);
+
+                    if (error?.stack) {
+                        console.error(`      Stack trace:`, error.stack);
+                    }
+                }
+            }
+
+            console.log("\n=== All jobs submitted and completed ===");
+
+            // Download images and upload to Supabase storage
+            const frames: Record<string, FrameUrls> = {};
+            console.log("\n→ Downloading and uploading frames...");
+
+            for (const job of jobs) {
+                if (job.status === "completed" && job.imageURL) {
+                    console.log(`\n  → Processing ${job.frameType} frame for scene ${job.sceneKey}...`);
+
+                    try {
+                        const frameUrl = await downloadAndUploadFrame(
+                            supabaseClient,
+                            project_id,
+                            job.sceneKey,
+                            job.frameType,
+                            job.imageURL
+                        );
+
+                        // Initialize scene frames if not exists
+                        if (!frames[job.sceneKey]) {
+                            frames[job.sceneKey] = { first_frame: "", last_frame: "" };
+                        }
+
+                        // Update the appropriate frame
+                        if (job.frameType === "first") {
+                            frames[job.sceneKey].first_frame = frameUrl;
+                        } else {
+                            frames[job.sceneKey].last_frame = frameUrl;
+                        }
+
+                        console.log(`  ✓ Uploaded ${job.frameType} frame for scene ${job.sceneKey}`);
+
+                        // Incrementally update the database
+                        await supabaseClient
+                            .from("projects")
+                            .update({
+                                frames: frames,
+                                updated_at: new Date().toISOString(),
+                            })
+                            .eq("id", project_id);
+
+                        console.log(`  ✓ Database updated with latest frames`);
+                    } catch (error) {
+                        console.error(`  ✗ Failed to process ${job.frameType} frame for scene ${job.sceneKey}:`, error.message);
+                    }
+                }
+            }
+
+            // Check for any failed jobs
+            const failedJobs = jobs.filter(j => j.status === "failed");
+            const completedJobs = jobs.filter(j => j.status === "completed");
+
+            if (failedJobs.length > 0) {
+                console.error(`\n✗ ${failedJobs.length} jobs failed:`);
+                failedJobs.forEach(job => {
+                    console.error(`  - ${job.frameType} frame for scene ${job.sceneKey}: ${job.error}`);
+                });
+
+                // If ANY jobs failed, return error response
+                console.error("\n=== FRAME GENERATION FAILED ===");
+                console.error(`  - Project ID: ${project_id}`);
+                console.error(`  - Total jobs: ${jobs.length}`);
+                console.error(`  - Completed: ${completedJobs.length}`);
+                console.error(`  - Failed: ${failedJobs.length}`);
+
+                return new Response(
+                    JSON.stringify({
+                        success: false,
+                        error: `Failed to generate ${failedJobs.length} of ${jobs.length} frames`,
+                        project_id,
+                        stats: {
+                            total_jobs: jobs.length,
+                            completed: completedJobs.length,
+                            failed: failedJobs.length,
+                        },
+                        failed_jobs: failedJobs.map(j => ({
+                            scene: j.sceneKey,
+                            frame_type: j.frameType,
+                            error: j.error,
+                        })),
+                    }),
+                    {
+                        headers: { ...corsHeaders, "Content-Type": "application/json" },
+                        status: 400,
+                    }
+                );
+            }
+
+            console.log(`\n=== All ${sceneCount} scenes processed ===`);
+
+            const result = { frames, sceneCount };
+
+            console.log("\n=== FRAME GENERATION COMPLETE ===");
+            console.log(`  - Project ID: ${project_id}`);
+            console.log(`  - Total scenes: ${result.sceneCount}`);
+            console.log(`  - Total frames generated: ${result.sceneCount * 2}`);
+
+            return new Response(
+                JSON.stringify({
+                    success: true,
+                    project_id,
+                    frames: result.frames,
+                    stats: {
+                        scenes_processed: result.sceneCount,
+                        frames_generated: result.sceneCount * 2,
+                    },
+                }),
+                {
+                    headers: { ...corsHeaders, "Content-Type": "application/json" },
+                    status: 200,
+                }
+            );
+        } finally {
+            // Always disconnect
+            if (runware) {
+                try {
+                    console.log("\n→ Disconnecting Runware SDK...");
+                    await runware.disconnect();
+                    console.log("✓ Runware SDK disconnected");
+                } catch (disconnectError) {
+                    console.warn("⚠ Error while disconnecting Runware SDK:", disconnectError?.message || String(disconnectError));
+                }
+            }
+        }
     } catch (error) {
-        console.error("Error:", error);
+        console.error("\n=== ERROR OCCURRED ===");
+        console.error("Error type:", error.constructor.name);
+        console.error("Error message:", error.message);
+        console.error("Error stack:", error.stack);
+
         return new Response(
             JSON.stringify({
                 success: false,
@@ -140,23 +355,36 @@ serve(async (req) => {
     }
 });
 
-async function generateAndUploadFrame(
+async function downloadAndUploadFrame(
     supabaseClient: any,
     projectId: string,
     sceneKey: string,
     frameType: "first" | "last",
-    frameDescription: string,
-    styleParameters: any
+    imageURL: string
 ): Promise<string> {
-    console.log(`Generating ${frameType} frame for scene ${sceneKey}...`);
+    const startTime = Date.now();
 
-    // Generate image using Runware API
-    const imageData = await generateImageWithRunware(frameDescription, styleParameters);
+    // Download the generated image
+    console.log(`    → Downloading image from Runware...`);
+    const downloadStartTime = Date.now();
+    const imageResponse = await fetch(imageURL);
 
-    // Create filename
+    if (!imageResponse.ok) {
+        throw new Error(`Failed to download image: ${imageResponse.status} ${imageResponse.statusText}`);
+    }
+
+    const arrayBuffer = await imageResponse.arrayBuffer();
+    const imageData = new Uint8Array(arrayBuffer);
+    const downloadTime = Date.now() - downloadStartTime;
+
+    console.log(`    ✓ Downloaded in ${downloadTime}ms (${(imageData.length / 1024).toFixed(2)} KB)`);
+
+    // Create filename and upload to Supabase storage
     const filename = `${projectId}/scene-${sceneKey}-${frameType}-${Date.now()}.png`;
+    console.log(`    → Uploading to Supabase storage...`);
+    console.log(`      - Filename: ${filename}`);
 
-    // Upload to Supabase storage
+    const uploadStartTime = Date.now();
     const { data: uploadData, error: uploadError } = await supabaseClient
         .storage
         .from("images")
@@ -166,8 +394,11 @@ async function generateAndUploadFrame(
         });
 
     if (uploadError) {
-        throw new Error(`Failed to upload ${frameType} frame for scene ${sceneKey}: ${uploadError.message}`);
+        throw new Error(`Failed to upload to storage: ${uploadError.message}`);
     }
+
+    const uploadTime = Date.now() - uploadStartTime;
+    console.log(`    ✓ Uploaded in ${uploadTime}ms`);
 
     // Get public URL
     const { data: { publicUrl } } = supabaseClient
@@ -175,66 +406,10 @@ async function generateAndUploadFrame(
         .from("images")
         .getPublicUrl(filename);
 
-    console.log(`${frameType} frame uploaded:`, publicUrl);
+    const totalTime = Date.now() - startTime;
+    console.log(`    ✓ Total processing time: ${totalTime}ms`);
+    console.log(`      - Public URL: ${publicUrl}`);
 
     return publicUrl;
-}
-
-async function generateImageWithRunware(
-    prompt: string,
-    styleParameters: any
-): Promise<Uint8Array> {
-    console.log("Generating image with prompt:", prompt);
-
-    const runwareApiKey = Deno.env.get("RUNWARE_API_KEY");
-    if (!runwareApiKey) {
-        throw new Error("RUNWARE_API_KEY environment variable is not set");
-    }
-
-    // Call Runware API to generate image using Gemini Flash Image 2.5
-    const response = await fetch("https://api.runware.ai/v1", {
-        method: "POST",
-        headers: {
-            "Authorization": `Bearer ${runwareApiKey}`,
-            "Content-Type": "application/json",
-        },
-        body: JSON.stringify([
-            {
-                taskType: "imageInference",
-                taskUUID: crypto.randomUUID(),
-                model: "gemini-flash-image-2.5",
-                positivePrompt: prompt,
-                width: 576,  // 9:16 aspect ratio
-                height: 1024,
-                numberResults: 1,
-                outputType: "base64",
-                outputFormat: "PNG",
-            },
-        ]),
-    });
-
-    if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Runware API error: ${errorText}`);
-    }
-
-    const result = await response.json();
-    console.log("Runware API response:", result);
-
-    // Extract base64 image from response
-    if (!result || !result[0] || !result[0].imageBase64) {
-        throw new Error(`Invalid response from Runware API: ${JSON.stringify(result)}`);
-    }
-
-    const base64Image = result[0].imageBase64;
-
-    // Convert base64 to Uint8Array
-    const binaryString = atob(base64Image);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-    }
-
-    return bytes;
 }
 
