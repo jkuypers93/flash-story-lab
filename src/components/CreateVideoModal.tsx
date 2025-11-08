@@ -13,7 +13,7 @@ interface CreateVideoModalProps {
 export const CreateVideoModal = ({ open, onOpenChange }: CreateVideoModalProps) => {
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
-  const [style, setStyle] = useState<string>("Silly");
+  const [style, setStyle] = useState<string>("normal");
 
   const handleCreate = () => {
     console.log("Creating video with:", { imageFile, audioBlob, style });

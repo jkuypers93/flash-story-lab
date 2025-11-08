@@ -11,7 +11,7 @@ interface StyleSelectorProps {
   onValueChange: (value: string) => void;
 }
 
-const STYLES = ["Silly", "Commercial", "Dramatic", "Comedy", "Cinematic"];
+const STYLES = ["normal", "funny", "cinematic", "commercial"];
 
 export const StyleSelector = ({ value, onValueChange }: StyleSelectorProps) => {
   return (
