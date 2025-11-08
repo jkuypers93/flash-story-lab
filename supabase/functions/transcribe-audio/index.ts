@@ -146,9 +146,11 @@ serve(async (req) => {
     } catch (error) {
         console.error("Error in transcribe-audio function:", error);
 
+        const errorMessage = error instanceof Error ? error.message : "An error occurred during transcription";
+
         return new Response(
             JSON.stringify({
-                error: error.message || "An error occurred during transcription",
+                error: errorMessage,
             }),
             {
                 status: 500,

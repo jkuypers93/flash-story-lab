@@ -59,7 +59,12 @@ export const CreateVideoModal = ({ open, onOpenChange }: CreateVideoModalProps) 
         .insert({
           input_image_url: imageUrl,
           audio_recording_url: audioUrl,
-          models_used: { style },
+          style_parameters: {
+            style,
+            identity_pack: {},
+            environment_pack: {},
+            palette_pack: {},
+          },
         })
         .select()
         .single();
