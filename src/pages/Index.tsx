@@ -1,12 +1,87 @@
-// Update this page (the content is just a fallback if you fail to update the page)
+import { useState } from "react";
+import { Plus, Video } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { CreateVideoModal } from "@/components/CreateVideoModal";
 
 const Index = () => {
+  const [modalOpen, setModalOpen] = useState(false);
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background">
-      <div className="text-center">
-        <h1 className="mb-4 text-4xl font-bold">Welcome to Your Blank App</h1>
-        <p className="text-xl text-muted-foreground">Start building your amazing project here!</p>
-      </div>
+    <div className="min-h-screen bg-background">
+      <header className="border-b border-border bg-card">
+        <div className="container mx-auto px-6 py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-primary to-accent flex items-center justify-center">
+                <Video className="w-6 h-6 text-primary-foreground" />
+              </div>
+              <h1 className="text-2xl font-semibold text-foreground">Video Creator</h1>
+            </div>
+            <Button 
+              onClick={() => setModalOpen(true)}
+              className="bg-primary hover:bg-primary/90"
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              Create Video
+            </Button>
+          </div>
+        </div>
+      </header>
+
+      <main className="container mx-auto px-6 py-12">
+        <div className="max-w-4xl mx-auto text-center space-y-6">
+          <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-primary/10 mb-4">
+            <Video className="w-10 h-10 text-primary" />
+          </div>
+          <h2 className="text-4xl font-bold text-foreground">
+            Create Amazing Videos
+          </h2>
+          <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
+            Transform your images and audio into stunning videos with just a few clicks. 
+            Choose your style and let creativity flow.
+          </p>
+          <Button 
+            size="lg"
+            onClick={() => setModalOpen(true)}
+            className="bg-primary hover:bg-primary/90 mt-4"
+          >
+            <Plus className="w-5 h-5 mr-2" />
+            Get Started
+          </Button>
+        </div>
+
+        <div className="mt-20 grid grid-cols-1 md:grid-cols-3 gap-8 max-w-4xl mx-auto">
+          <div className="text-center space-y-3">
+            <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mx-auto">
+              <span className="text-2xl">📸</span>
+            </div>
+            <h3 className="font-semibold text-foreground">Upload Image</h3>
+            <p className="text-sm text-muted-foreground">
+              Start with your favorite image in JPG or PNG format
+            </p>
+          </div>
+          <div className="text-center space-y-3">
+            <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mx-auto">
+              <span className="text-2xl">🎤</span>
+            </div>
+            <h3 className="font-semibold text-foreground">Record Audio</h3>
+            <p className="text-sm text-muted-foreground">
+              Add your voice or narration up to 40 seconds
+            </p>
+          </div>
+          <div className="text-center space-y-3">
+            <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mx-auto">
+              <span className="text-2xl">🎬</span>
+            </div>
+            <h3 className="font-semibold text-foreground">Choose Style</h3>
+            <p className="text-sm text-muted-foreground">
+              Select from various styles to match your vision
+            </p>
+          </div>
+        </div>
+      </main>
+
+      <CreateVideoModal open={modalOpen} onOpenChange={setModalOpen} />
     </div>
   );
 };
