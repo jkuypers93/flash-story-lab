@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Plus, Video } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CreateVideoModal } from "@/components/CreateVideoModal";
+import { ProjectsList } from "@/components/ProjectsList";
 
 const Index = () => {
   const [modalOpen, setModalOpen] = useState(false);
@@ -29,7 +30,7 @@ const Index = () => {
       </header>
 
       <main className="container mx-auto px-6 py-12">
-        <div className="max-w-4xl mx-auto text-center space-y-6">
+        <div className="max-w-4xl mx-auto text-center space-y-6 mb-12">
           <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-primary/10 mb-4">
             <Video className="w-10 h-10 text-primary" />
           </div>
@@ -50,6 +51,10 @@ const Index = () => {
           </Button>
         </div>
 
+        <div className="max-w-6xl mx-auto">
+          <h3 className="text-2xl font-semibold mb-4">Your Projects</h3>
+          <ProjectsList />
+        </div>
       </main>
 
       <CreateVideoModal open={modalOpen} onOpenChange={setModalOpen} />
